@@ -1,0 +1,307 @@
+import os
+import json
+import time
+import warnings
+import requests 
+import pyttsx3
+import sounddevice as sd
+import torch
+import numpy as np
+from transformers import WhisperForConditionalGeneration, WhisperProcessor
+
+
+warnings.filterwarnings("ignore")
+
+# ======== SETUP OPEN ROUTER API (LLaMA) =========
+
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") #<-- Put your api key 
+MODEL_ID = "moonshotai/kimi-k2:free"
+MEMORY_PATH = "memory.json"
+KIMI_k2 = MODEL_ID
+RECORD_SECONDS = 5  # Duration of recording
+SAMPLE_RATE = 16000  # Sample rate for recording
+
+if not OPENROUTER_API_KEY:
+    raise ValueError("Please set the OPENROUTER_API_KEY environment variable.") 
+
+# ======LOAD/INIT MODEL===
+print("Loading Whisper model...")
+processor = WhisperProcessor.from_pretrained("openai/whisper-base")
+stt_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-base")
+stt_model.eval()
+
+# ======MOVE TO GPU=====
+device = "cuda" if torch.cuda.is_available() else "cpu"
+stt_model = stt_model.to(device)
+print(f"Model loaded on: {device.upper()}")
+
+# ========= MEMORY UTILITIES=======
+def load_memory(path = MEMORY_PATH):
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+        return{
+            "facts":[],
+            "preferences":[],
+            "notes":[],
+            "stats": {"sessions":0, "total_utterances": 0},
+        }
+    
+
+# ✅ Use one variable name consistently
+MEMORY_FILE = "memory.json"
+
+def load_memory():
+    """Load memory from JSON file, or initialize if missing/corrupt."""
+    if os.path.exists(MEMORY_FILE):
+        try:
+            with open(MEMORY_FILE, "r") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception as e:
+            print(f"⚠️ Error loading memory, resetting. ({e})")
+    return {}  # fallback if file is missing or corrupt
+
+def save_memory(memory):
+    """Save memory safely to JSON file."""
+    try:
+        with open(MEMORY_FILE, "w") as f:
+            json.dump(memory, f, indent=4)
+    except Exception as e:
+        print(f"⚠️ Error saving memory: {e}")
+
+# --- Initialize memory ---
+memory = load_memory()
+
+# Ensure memory sections exist
+if "stats" not in memory:
+    memory["stats"] = {}
+if "facts" not in memory:
+    memory["facts"] = []
+if "preferences" not in memory:
+    memory["preferences"] = []
+if "notes" not in memory:
+    memory["notes"] = []
+
+# Ensure counters exist
+memory["stats"]["sessions"] = memory["stats"].get("sessions", 0) + 1
+memory["stats"]["total_utterances"] = memory["stats"].get("total_utterances", 0)
+
+print(f"🚀 Session count: {memory['stats']['sessions']}")
+
+# Save back to file
+save_memory(memory)
+
+    
+def save_memory(mem, path = MEMORY_PATH):
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(mem, f, ensure_ascii = False, indent =2)
+
+def summarize_memory(mem):
+    facts = "; ".join([f["text"] for f in mem.get("facts", [])]) or "No svaed facts yet."
+    prefs = "; ".join([f'{p["key"]}: {p["value"]}' for p in mem.get("preferences", [])]) or "No saved preferences yet."
+    notes = "; ".join([n["text"] for n in mem.get("notes", [])]) or "No saved notes yet."
+    return f"known facts: {facts}. Preferences: {prefs}. Notes: {notes}."
+
+def remember_fact(mem, fact_text):
+    fact_text = fact_text.strip()
+    if not fact_text:
+        return "What exactly should I remember?"
+    for f in mem["facts"]:
+        if f["text"].lower() == fact_text.lower():
+            return "I already remember that!"
+    mem["facts"].append({"text": fact_text, "timestamp": time.time()})
+    save_memory(mem)
+    return f"Remembered {fact_text}"
+
+
+def forget_matches(mem, needle):
+    needle = needle.strip().lower()
+    if not needle:
+        return "Tell me what to forget—preferably something embarrassing."
+    before = len(mem["facts"])
+    mem["facts"] = [f for f in mem["facts"] if needle not in f["text"].lower()]
+    after = len(mem["facts"])
+    save_memory(mem)
+    if after < before:
+        return f"Poof. Forgot {before - after} thing(s) containing '{needle}'."
+    return "Nothing matched that. My memory is impeccable, sadly."
+
+def reset_memory():
+    if os.path.exists(MEMORY_PATH):
+        os.remove(MEMORY_PATH)
+    return "Memory wiped. Fresh start. New me, who dis?"
+
+# ====== AUDIO I/O =========
+def record_audio(duration=RECORD_SECONDS, fs=SAMPLE_RATE):
+    print("\nSpeak now...")
+    audio = sd.rec(int(duration * fs), samplerate=fs, channels = 1, dtype='float32')
+    sd.wait()
+    print("Recording complete.\n")
+    return np.squeeze(audio)
+
+# Transcribe audio using Whisper
+def transcribe(audio, fs=SAMPLE_RATE):
+    feats = processor.feature_extractor(audio, sampling_rate=fs, return_tensors="pt").input_features.to(device)
+    with torch.no_grad():
+        ids = stt_model.generate(feats)
+    text = processor.tokenizer.batch_decode(ids, skip_special_tokens=True)[0]
+    return text.strip()
+
+def speak(text):
+    # Basic offline TTS. Swap later for Bark/Coqui if you want natural voices.
+    print(f"KIMI: {text}")
+    engine = pyttsx3.init()
+    engine.say(text)
+    engine.runAndWait()
+
+OPENROUTER_API_KEY = "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"
+
+# ====== SEND TO KIMI K2 ======
+def ask_kimi(conversation):
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",  # ✅ Capital B
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost",
+        "X-Title": "Voice Assistant"
+    }
+    payload = {
+        "model": KIMI_k2,
+        "messages": conversation,   # ✅ Send full conversation
+        "max_tokens": 300,
+        "temperature": 0.9,
+        "top_p": 0.9
+    }
+    try:
+        r = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
+        r.raise_for_status()
+        data = r.json()
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print("❌ Error contacting Kimi:", e)
+        return "Oops! I had trouble thinking of a response."
+
+# ========= CONVERSATION MGMT =========
+def base_system_prompt(mem_summary):
+    return (
+        "You are a highly extroverted, witty, sarcastic voice assistant. "
+        "Be playful but never mean. Keep replies helpful and accurate, with light teasing and comedic timing. "
+        f"Long-term memory summary for this user: {mem_summary} "
+        "If the user asks to remember/forget/reset memory, comply and confirm. "
+        "Be concise by default for voice. Avoid long lists unless asked."
+    )
+
+def detect_memory_command(text):
+    t = text.lower().strip()
+    if t.startswith("remember that "):
+        return ("remember", text[len("remember that "):])
+    if t.startswith("remember "):
+        return ("remember", text[len("remember "):])
+    if t.startswith("forget "):
+        return ("forget", text[len("forget "):])
+    if "what do you remember" in t or "what do u remember" in t or "what do you know about me" in t:
+        return ("summarize", "")
+    if "reset memory" in t or "wipe memory" in t or "clear memory" in t:
+        return ("reset", "")
+    return (None, "")
+
+def trim_conversation(messages, max_turns=12):
+    # Keep system + the last N exchanges to avoid exploding context
+    sys = [m for m in messages if m["role"] == "system"]
+    non_sys = [m for m in messages if m["role"] != "system"]
+    return sys + non_sys[-max_turns:]
+
+
+# Speak text using brak
+#def speak_with_bark(text):
+#    print("Speaking(Bark):", text)
+#    audio_array = generate_audio(text)
+
+# Speak with coqui TTS
+#def speak(text):
+#    print("Speaking...",text)
+#    audio.tts.tts(text)
+#    sd.play(audio, samplerate=22050)
+#    sd.wait()
+
+    # Play audio
+ #   sd.play(audio_array, samplerate=1500)
+ #   sd.wait()
+
+# ========= MAIN LOOP =========
+if __name__ == "__main__":
+    memory = load_memory()
+    memory["stats"]["sessions"] = memory.get("stats", {}).get("sessions", 0) + 1
+    save_memory(memory)
+
+    conversation = []
+    system_msg = {"role": "system", "content": base_system_prompt(summarize_memory(memory))}
+    conversation.append(system_msg)
+
+    print("🎧 Voice agent ready. Say something like:")
+    print("- \"remember that I like pineapple pizza\"")
+    print("- \"forget pineapple\"")
+    print("- \"what do you remember\"")
+    print("- normal chat: \"what's the weather vibe today?\" (I'll be sarcastic but helpful)\n")
+
+    while True:
+        try:
+            # 1) Listen + transcribe
+            audio_data = record_audio(duration=RECORD_SECONDS)
+            user_text = transcribe(audio_data)
+            print(f"🧑 You said: {user_text}")
+            memory["stats"]["total_utterances"] += 1
+            save_memory(memory)
+
+            if not user_text:
+                print("⚠️ No speech detected. Try again…")
+                continue
+
+            # 2) Intercept memory commands
+            cmd, arg = detect_memory_command(user_text)
+            if cmd == "remember":
+                msg = remember_fact(memory, arg)
+                speak(msg)
+                # Refresh system prompt with the new memory
+                conversation[0] = {"role": "system", "content": base_system_prompt(summarize_memory(memory))}
+                continue
+            elif cmd == "forget":
+                msg = forget_matches(memory, arg)
+                speak(msg)
+                conversation[0] = {"role": "system", "content": base_system_prompt(summarize_memory(memory))}
+                continue
+            elif cmd == "summarize":
+                msg = summarize_memory(memory)
+                speak(msg)
+                continue
+            elif cmd == "reset":
+                speak(reset_memory())
+                memory = load_memory()  # loads fresh
+                conversation[0] = {"role": "system", "content": base_system_prompt(summarize_memory(memory))}
+                continue
+
+            # 3) Normal chat flow: ask LLM with conversation context
+            conversation.append({"role": "user", "content": user_text})
+            conversation = trim_conversation(conversation, max_turns=12)
+
+            try:
+                reply = ask_kimi(conversation)
+            except Exception as e:
+                print("❌ LLM error:", e)
+                reply = "My brain took a coffee break. Say that again?"
+
+            conversation.append({"role": "assistant", "content": reply})
+            speak(reply)
+
+            # 4) Continue?
+            cont = input("\nRecord again? (y/n): ").strip().lower()
+            if cont != 'y':
+                print("👋 Exiting...")
+                break
+
+        except KeyboardInterrupt:
+            print("\n🛑 Interrupted by user. Bye!")
+            break
+        except Exception as e:
+            print("⚠️ Error:", str(e))
