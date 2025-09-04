@@ -158,7 +158,7 @@ def speak(text):
 
 OPENROUTER_API_KEY = "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"
 
-# ====== SEND TO KIMI K2 ======
+# ======== SEND TO KIMI K2 ========
 def ask_kimi(conversation):
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",  # ✅ Capital B
@@ -305,3 +305,4 @@ if __name__ == "__main__":
             break
         except Exception as e:
             print("⚠️ Error:", str(e))
+
