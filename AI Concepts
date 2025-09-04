@@ -1,1 +1,37 @@
 here will be AI Concept
+'''Question: Simulate medical test results to estimate the probability that a patient actually has a
+disease if their test is positive for 10000 patients.
+The conditions are:
+• 1% disease rate (rare disease).
+• Test detects disease correctly in 95% of diseased patients (true positive rate).
+• Test falsely alarms in 5% of healthy patients (false positive rate).
+Algorithm: Probability Estimation using Bayes’ Theorem (Simulation)
+Input:
+• Disease prevalence (P(D)) = 0.01
+• True Positive Rate (Sensitivity) = 0.95
+• False Positive Rate = 0.05
+• Number of patients to simulate = 10,000
+Output:
+Estimated probability P(Disease | Test Positive)'''
+
+
+-- code --
+
+
+def bayes_theorem(P_A, P_notA, P_B_given_A, P_B_given_notA):
+    # Total probability of B
+    P_B = P_B_given_A * P_A + P_B_given_notA * P_notA
+
+    # Bayes' Theorem
+    P_A_given_B = (P_B_given_A * P_A) / P_B
+    return P_A_given_B
+
+# Example values
+P_D = 0.01  # Prevalence of disease
+P_notD = 1 - P_D
+P_Pos_given_D = 0.95
+P_Pos_given_notD = 0.05
+
+# Calculate probability of disease given positive test
+P_D_given_Pos = bayes_theorem(P_D, P_notD, P_Pos_given_D, P_Pos_given_notD)
+print("Probability of disease given positive test:", round(P_D_given_Pos, 4))
