@@ -34,4 +34,6 @@ P_Pos_given_notD = 0.05
 
 # Calculate probability of disease given positive test
 P_D_given_Pos = bayes_theorem(P_D, P_notD, P_Pos_given_D, P_Pos_given_notD)
-print("Probability of disease given positive test:", round(P_D_given_Pos, 4))
+print("Probability of disease given positive test:", round(P_D_given_Pos, 4)
+
+Ai
